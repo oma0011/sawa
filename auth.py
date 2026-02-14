@@ -4,7 +4,7 @@ Sawa — Security: Twilio validation, PIN auth, RBAC, phone encryption
 from datetime import datetime, timezone, timedelta
 
 from fastapi import Request, HTTPException
-from passlib.hash import bcrypt
+import bcrypt as _bcrypt
 from twilio.request_validator import RequestValidator
 from cryptography.fernet import Fernet
 import base64
@@ -59,11 +59,11 @@ async def validate_twilio_request(request: Request):
 # ── PIN Helpers ─────────────────────────────────────────────────────────────
 
 def hash_pin(pin: str) -> str:
-    return bcrypt.hash(pin)
+    return _bcrypt.hashpw(pin.encode(), _bcrypt.gensalt()).decode()
 
 
 def verify_pin(pin: str, pin_hash: str) -> bool:
-    return bcrypt.verify(pin, pin_hash)
+    return _bcrypt.checkpw(pin.encode(), pin_hash.encode())
 
 
 PIN_TTL = timedelta(minutes=10)

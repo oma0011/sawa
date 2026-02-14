@@ -4,7 +4,7 @@ Thin webhook handler; logic lives in conversation.py, hiring.py, ai.py
 """
 import logging
 
-from fastapi import FastAPI, Form, Depends, Request
+from fastapi import FastAPI, Form, Depends, Request, HTTPException
 from fastapi.responses import Response, JSONResponse
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -48,6 +48,14 @@ app.state.limiter = limiter
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return twiml_response("Too many requests. Please wait a moment and try again.")
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Return TwiML for webhook errors so Twilio doesn't report retrieval failure."""
+    if "/whatsapp/" in str(request.url):
+        return twiml_response("Request denied.")
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 # ── Webhook ─────────────────────────────────────────────────────────────────

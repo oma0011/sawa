@@ -69,8 +69,8 @@ Or just type naturally: "how much do I get paid?", "add John as accountant", "wh
 ### Install
 
 ```bash
-git clone https://github.com/oma0011/nigerian-hr-bot.git
-cd nigerian-hr-bot
+git clone https://github.com/oma0011/sawa.git
+cd sawa
 pip install -r requirements.txt
 ```
 

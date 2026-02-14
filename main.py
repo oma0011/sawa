@@ -3,10 +3,11 @@ Nigerian HR Bot - Production Ready
 100% WhatsApp-based HR system
 """
 from fastapi import FastAPI, Form
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import Response
 from typing import Optional, Dict, List
 from datetime import datetime, date
 from decimal import Decimal
+from xml.sax.saxutils import escape
 import re
 import os
 
@@ -14,6 +15,14 @@ from payroll_engine import NigerianPayrollEngine, EmployeeSalaryStructure
 
 app = FastAPI(title="Nigerian HR Bot")
 payroll_engine = NigerianPayrollEngine()
+
+def twiml_response(message: str) -> Response:
+    """Wrap a text message in TwiML so Twilio sends it back via WhatsApp."""
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<Response><Message>{escape(message)}</Message></Response>'
+    )
+    return Response(content=xml, media_type="application/xml")
 
 # Default leave allocation (Nigerian standard)
 DEFAULT_ANNUAL_LEAVE_DAYS = 21
@@ -147,40 +156,40 @@ async def whatsapp_webhook(
     # Main commands
     if command in ['MENU', 'START', 'HELP']:
         reset_state(phone)
-        return {"message": show_menu()}
+        return twiml_response(show_menu())
 
     if command == 'REGISTER':
         set_state(phone, 'REG_NAME')
-        return {"message": "🏢 *Company Registration*\n\nCompany name?"}
+        return twiml_response("🏢 *Company Registration*\n\nCompany name?")
 
     if command == 'ADD EMPLOYEE':
         if not DB.companies.get(phone):
-            return {"message": "⚠️ Please REGISTER your company first"}
+            return twiml_response("⚠️ Please REGISTER your company first")
         set_state(phone, 'EMP_NAME')
-        return {"message": "➕ *Add Employee*\n\nEmployee's full name?"}
+        return twiml_response("➕ *Add Employee*\n\nEmployee's full name?")
 
     if command == 'PAYROLL':
         return handle_payroll(phone)
 
     if command == 'LIST':
-        return {"message": list_employees(phone)}
+        return twiml_response(list_employees(phone))
 
     if command == 'PAYSLIP':
-        return {"message": handle_payslip(phone)}
+        return twiml_response(handle_payslip(phone))
 
     if command == 'LEAVE':
-        return {"message": handle_leave(phone)}
+        return twiml_response(handle_leave(phone))
 
     # Check if it's a numeric reply (for PAYROLL_VIEW state)
     if command.isdigit():
         state = get_state(phone)
         if state['state'] == 'PAYROLL_VIEW':
-            return {"message": handle_payroll_detail(phone, int(command), state)}
+            return twiml_response(handle_payroll_detail(phone, int(command), state))
 
     # State machine - pass original text to preserve casing
     state = get_state(phone)
     response = handle_state(phone, original_text, state)
-    return {"message": response}
+    return twiml_response(response)
 
 def handle_state(phone: str, text: str, state: Dict) -> str:
     s = state['state']
@@ -271,11 +280,11 @@ Gross: {fmt(total)}
 
     return show_menu()
 
-def handle_payroll(phone: str) -> Dict:
+def handle_payroll(phone: str) -> Response:
     emps = [e for e in DB.employees.values() if e.get('company_phone') == phone]
 
     if not emps:
-        return {"message": "⚠️ No employees. Type: ADD EMPLOYEE"}
+        return twiml_response("⚠️ No employees. Type: ADD EMPLOYEE")
 
     results = []
     total_net = Decimal('0')
@@ -318,7 +327,7 @@ def handle_payroll(phone: str) -> Dict:
     response += f"{'━'*30}\n*TOTAL NET: {fmt(total_net)}*\n{'━'*30}\n\n"
     response += f"Reply 1-{len(results)} to view payslip"
 
-    return {"message": response}
+    return twiml_response(response)
 
 def handle_payroll_detail(phone: str, index: int, state: Dict) -> str:
     """Handle numeric reply after PAYROLL to show individual payslip."""

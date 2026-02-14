@@ -20,9 +20,19 @@ def twiml_response(message: str) -> Response:
 
 
 def parse_number(text: str):
-    """Parse a number from user input, returning float or None."""
+    """Parse a number from user input, returning float or None.
+    Supports shorthand: 200k → 200000, 3.5m → 3500000
+    """
     try:
-        val = float(text.replace(',', '').replace('\u20a6', '').strip())
+        cleaned = text.lower().replace(',', '').replace('\u20a6', '').strip()
+        multiplier = 1
+        if cleaned.endswith('k'):
+            multiplier = 1_000
+            cleaned = cleaned[:-1]
+        elif cleaned.endswith('m'):
+            multiplier = 1_000_000
+            cleaned = cleaned[:-1]
+        val = float(cleaned) * multiplier
         if val < 0 or val > 1_000_000_000:
             return None
         return val

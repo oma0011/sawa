@@ -24,29 +24,71 @@ payroll_engine = NigerianPayrollEngine()
 DEFAULT_ANNUAL_LEAVE_DAYS = 21
 PAGE_SIZE = 5  # employees per page for WhatsApp readability
 
+# Numbered menu shortcuts → mapped to command strings
+MENU_SHORTCUTS = {
+    '1': 'REGISTER',
+    '2': 'ADD EMPLOYEE',
+    '3': 'PAYROLL',
+    '4': 'LIST',
+    '5': 'POST JOB',
+    '6': 'CANDIDATES',
+    '7': 'PAYSLIP',
+    '8': 'LEAVE',
+}
+
 
 def show_menu() -> str:
-    return """\U0001f1f3\U0001f1ec *Sawa HR*
+    return """Hey there! \U0001f44b Welcome to *Sawa HR* \U0001f1f3\U0001f1ec
 
-*FOR EMPLOYERS:*
-\U0001f4dd REGISTER - Setup company
-\U0001f465 ADD EMPLOYEE - Add team
-\U0001f4b0 PAYROLL - Calculate salaries
-\U0001f4cb LIST - View employees
+Here's what I can help with:
 
-*HIRING:*
-\U0001f4e2 POST JOB - Create job listing
-\U0001f465 CANDIDATES - View applicants
+\U0001f3e2 *Company Setup*
+1. Register your company
+2. Add an employee
+3. Run payroll
+4. View your team
 
-*FOR EMPLOYEES:*
-\U0001f4c4 PAYSLIP - View yours
-\U0001f3d6\ufe0f LEAVE - Check balance
+\U0001f4bc *Hiring*
+5. Post a job opening
+6. View candidates
 
-*FOR CANDIDATES:*
-\U0001f4e9 APPLY <code> - Apply to a job
+\U0001f464 *Self-Service*
+7. View my payslip
+8. Check leave balance
 
-*OTHER:*
-\u2753 HELP - All commands"""
+Just type what you need \u2014 I understand plain English too! \U0001f60a"""
+
+
+async def _smart_extract(text: str, field_type: str, validator=None):
+    """Try direct validation first, then AI extraction for conversational input.
+
+    Returns (value, used_ai) or (None, False).
+    """
+    # 1. Try direct validator first (free, instant)
+    if validator:
+        direct = validator(text)
+        if direct is not None and direct is not False:
+            return (direct if not isinstance(direct, bool) else text, False)
+
+    # 2. Only call AI if input has >1 word (looks conversational)
+    if len(text.split()) <= 1:
+        return (None, False)
+
+    from ai import extract_field_value
+    result = await extract_field_value(text, field_type)
+    if not result or result.get("confidence") == "low":
+        return (None, False)
+
+    extracted = result["value"]
+
+    # 3. Re-validate AI's extracted value
+    if validator:
+        validated = validator(str(extracted))
+        if validated is None or validated is False:
+            return (None, False)
+        return (validated if not isinstance(validated, bool) else str(extracted), True)
+
+    return (extracted, True)
 
 
 async def handle_message(session: AsyncSession, phone: str, original_text: str) -> str:
@@ -55,27 +97,31 @@ async def handle_message(session: AsyncSession, phone: str, original_text: str) 
     command = text.upper().strip()
 
     # ── Tier 1: Exact command match ──
-    if command in ('MENU', 'START', 'HELP'):
+    if command in ('MENU', 'START', 'HELP', 'HI', 'HELLO', 'HEY'):
         await reset_conversation_state(session, phone)
         return show_menu()
 
     if command == 'CANCEL':
         await reset_conversation_state(session, phone)
-        return "Cancelled. Type HELP for menu."
+        return "No worries! Cancelled. \U0001f44d Type anything to start again."
+
+    # ── Numbered menu shortcuts ──
+    if command in MENU_SHORTCUTS:
+        return await handle_message(session, phone, MENU_SHORTCUTS[command])
 
     if command == 'REGISTER':
         await set_conversation_state(session, phone, 'REG_NAME')
-        return "\U0001f3e2 *Company Registration*\n\nCompany name?"
+        return "\U0001f3e2 *Company Registration*\n\nWhat's your company name?"
 
     if command == 'ADD EMPLOYEE':
         company = await get_company_by_phone(session, phone)
         if not company:
-            return "\u26a0\ufe0f Please REGISTER your company first"
+            return "Hmm, you haven't registered yet. Just say *register* to get started! \U0001f60a"
         user = await get_user(session, phone)
         if not check_role(user, "ADD_EMPLOYEE"):
-            return "\u26a0\ufe0f Only owners and admins can add employees."
+            return "Only owners and admins can add employees. Check with your admin! \U0001f512"
         await set_conversation_state(session, phone, 'EMP_NAME', {'company_id': company.id})
-        return "\u2795 *Add Employee*\n\nEmployee's full name?"
+        return "\u2795 *Add Employee*\n\nWhat's the employee's full name?"
 
     if command == 'PAYROLL':
         return await handle_payroll(session, phone)
@@ -165,10 +211,10 @@ async def handle_message(session: AsyncSession, phone: str, original_text: str) 
                             prefill['position'] = entities['position']
                             await set_conversation_state(session, phone, 'EMP_BASIC', prefill)
                             await log_action(session, company.id, phone, "ADD_EMPLOYEE_START_AI", entities)
-                            return f"\u2795 Adding *{entities['name']}* as *{entities['position']}*\n\n\U0001f4b0 BASIC SALARY (monthly)?\n\nExample: 200000"
+                            return f"\u2795 Adding *{entities['name']}* as *{entities['position']}*\n\nNow for the numbers! \U0001f4b0 What's their monthly basic salary? (e.g. 200k)"
                         await set_conversation_state(session, phone, 'EMP_POSITION', prefill)
                         await log_action(session, company.id, phone, "ADD_EMPLOYEE_START_AI", entities)
-                        return f"\u2795 Adding *{entities['name']}*\n\nPosition/Job title?"
+                        return f"\u2795 Adding *{entities['name']}*\n\nWhat position will they hold?"
 
         # Recurse with the mapped command
         return await handle_message(session, phone, mapped_cmd)
@@ -185,22 +231,35 @@ async def handle_state(session: AsyncSession, phone: str, text: str, conv: Conve
 
     # ── REGISTRATION ──
     if s == 'REG_NAME':
-        await set_conversation_state(session, phone, 'REG_EMAIL', {'name': text})
-        return f"Great! *{text}*\n\nCompany email?"
+        name = text.strip()
+        # Try AI extraction if multi-word and looks conversational
+        if len(text.split()) > 2:
+            extracted, _ = await _smart_extract(text, 'name')
+            if extracted:
+                name = str(extracted)
+        await set_conversation_state(session, phone, 'REG_EMAIL', {'name': name})
+        return f"Nice one! *{name}* \u2014 great name. \U0001f44d\n\nWhat email should we use for the company?"
 
     if s == 'REG_EMAIL':
-        if not validate_email(text):
-            return "\u274c Invalid email format. Please enter a valid email (e.g. hr@company.com)"
-        await set_conversation_state(session, phone, 'REG_PIN', {'email': text})
-        return "\U0001f512 Set a 4-digit PIN for secure operations:"
+        # Try direct validation first
+        email = text.strip()
+        if validate_email(email):
+            await set_conversation_state(session, phone, 'REG_PIN', {'email': email})
+            return "Almost done! \U0001f512 Choose a 4-digit PIN to protect sensitive actions like payroll:"
+        # Try AI extraction for conversational input
+        extracted, _ = await _smart_extract(text, 'email', validator=lambda t: t if validate_email(t) else None)
+        if extracted:
+            await set_conversation_state(session, phone, 'REG_PIN', {'email': extracted})
+            return "Almost done! \U0001f512 Choose a 4-digit PIN to protect sensitive actions like payroll:"
+        return "Hmm, that doesn't look like a valid email. Try something like *hr@company.com* \U0001f4e7"
 
     if s == 'REG_PIN':
         if not (text.isdigit() and len(text) == 4):
-            return "\u274c PIN must be exactly 4 digits."
+            return "The PIN needs to be exactly 4 digits. Give it another go! \U0001f522"
 
         if not d.get('name') or not d.get('email'):
             await reset_conversation_state(session, phone)
-            return "\u26a0\ufe0f Session expired. Please type REGISTER to start again."
+            return "Oops, your session timed out. Just say *register* to start again! \U0001f504"
 
         pin_hashed = hash_pin(text)
 
@@ -208,7 +267,7 @@ async def handle_state(session: AsyncSession, phone: str, text: str, conv: Conve
         existing = await get_company_by_phone(session, phone)
         if existing:
             await reset_conversation_state(session, phone)
-            return "\u2705 You're already registered! Type HELP for commands."
+            return "You're already registered! \u2705 Type *help* for what you can do."
 
         # Create company
         company = Company(name=d['name'], email=d['email'], phone=phone)
@@ -222,52 +281,89 @@ async def handle_state(session: AsyncSession, phone: str, text: str, conv: Conve
         await log_action(session, company.id, phone, "REGISTER", {"company": d['name']})
         await reset_conversation_state(session, phone)
 
-        return f"\u2705 *Registered!*\n\nWelcome, {d['name']}!\nPIN set successfully.\n\nType:\n\u2022 ADD EMPLOYEE\n\u2022 PAYROLL\n\u2022 HELP"
+        return f"Welcome aboard, *{d['name']}*! \U0001f389 Your company is all set up.\n\nPIN secured \U0001f512\n\nHere's what to do next:\n\u2022 Say *add employee* to build your team\n\u2022 Say *payroll* when you're ready to run salaries\n\u2022 Say *help* anytime"
 
     # ── EMPLOYEE ADD ──
     if s == 'EMP_NAME':
         company_id = d.get('company_id')
-        if await check_duplicate_employee(session, company_id, text):
-            return f"\u26a0\ufe0f An employee named *{text}* already exists. Send the name again or enter a different name."
-        await set_conversation_state(session, phone, 'EMP_PHONE', {'name': text})
-        return "Phone number?"
+        name = text.strip()
+        # Try AI extraction for conversational input
+        if len(text.split()) > 2:
+            extracted, _ = await _smart_extract(text, 'name')
+            if extracted:
+                name = str(extracted)
+        if await check_duplicate_employee(session, company_id, name):
+            return f"Looks like *{name}* is already on your team! Send the name again or try a different name."
+        await set_conversation_state(session, phone, 'EMP_PHONE', {'name': name})
+        return f"Got it \u2014 *{name}*! \u2705\n\nWhat's their phone number?"
 
     if s == 'EMP_PHONE':
-        if not validate_phone(text):
-            return "\u274c Invalid phone number. Please enter a valid number (7-15 digits)."
-        cleaned_phone = normalize_phone(text)
-        await set_conversation_state(session, phone, 'EMP_POSITION', {'phone': cleaned_phone})
-        return "Position/Job title?"
+        # Try direct validation
+        if validate_phone(text):
+            cleaned_phone = normalize_phone(text)
+            await set_conversation_state(session, phone, 'EMP_POSITION', {'phone': cleaned_phone})
+            name = d.get('name', 'they')
+            return f"Phone saved \u2705\n\nWhat position will *{name}* hold?"
+        # Try AI extraction
+        extracted, _ = await _smart_extract(text, 'phone', validator=lambda t: normalize_phone(t) if validate_phone(t) else None)
+        if extracted:
+            await set_conversation_state(session, phone, 'EMP_POSITION', {'phone': extracted})
+            name = d.get('name', 'they')
+            return f"Phone saved \u2705\n\nWhat position will *{name}* hold?"
+        return "I didn't catch that as a phone number. Try entering just the digits (7-15 digits). \U0001f4f1"
 
     if s == 'EMP_POSITION':
-        await set_conversation_state(session, phone, 'EMP_BASIC', {'position': text})
-        return "\U0001f4b0 BASIC SALARY (monthly)?\n\nExample: 200000"
+        position = text.strip()
+        if len(text.split()) > 3:
+            extracted, _ = await _smart_extract(text, 'position')
+            if extracted:
+                position = str(extracted)
+        await set_conversation_state(session, phone, 'EMP_BASIC', {'position': position})
+        name = d.get('name', 'this employee')
+        return f"*{position}* \u2014 nice! \u2705\n\nNow for the numbers! \U0001f4b0 What's *{name}*'s monthly basic salary?\n_(e.g. 200000 or 200k)_"
 
     if s == 'EMP_BASIC':
         basic = parse_number(text)
         if not basic:
-            return "\u274c Invalid. Example: 200000"
+            # Try AI extraction for conversational input
+            extracted, _ = await _smart_extract(text, 'salary', validator=lambda t: parse_number(t))
+            if extracted:
+                basic = extracted
+            else:
+                return "I didn't catch that as a number. Try *200000* or *200k* \U0001f4b0"
         await set_conversation_state(session, phone, 'EMP_HOUSING', {'basic': basic})
-        return f"Basic: {fmt(basic)}\n\nHOUSING allowance?\n(Enter 0 if none)"
+        return f"Basic salary: {fmt(basic)} \u2713\n\nAny housing allowance? _(Enter 0 if none)_"
 
     if s == 'EMP_HOUSING':
         housing = parse_number(text)
         if housing is None:
-            return "\u274c Invalid"
+            extracted, _ = await _smart_extract(text, 'salary', validator=lambda t: parse_number(t))
+            if extracted is not None:
+                housing = extracted
+            else:
+                return "I didn't catch that as a number. Try *50000* or *50k* (or *0* for none)"
         await set_conversation_state(session, phone, 'EMP_TRANSPORT', {'housing': housing})
-        return f"Housing: {fmt(housing)}\n\nTRANSPORT allowance?\n(Enter 0 if none)"
+        return f"Housing: {fmt(housing)} \u2713\n\nTransport allowance? _(Enter 0 if none)_"
 
     if s == 'EMP_TRANSPORT':
         transport = parse_number(text)
         if transport is None:
-            return "\u274c Invalid"
+            extracted, _ = await _smart_extract(text, 'salary', validator=lambda t: parse_number(t))
+            if extracted is not None:
+                transport = extracted
+            else:
+                return "I didn't catch that as a number. Try *30000* or *30k* (or *0* for none)"
         await set_conversation_state(session, phone, 'EMP_OTHER', {'transport': transport})
-        return f"Transport: {fmt(transport)}\n\nOTHER allowances?\n(Enter 0 if none)"
+        return f"Transport: {fmt(transport)} \u2713\n\nAny other allowances? _(Enter 0 if none)_"
 
     if s == 'EMP_OTHER':
         other = parse_number(text)
         if other is None:
-            return "\u274c Invalid"
+            extracted, _ = await _smart_extract(text, 'salary', validator=lambda t: parse_number(t))
+            if extracted is not None:
+                other = extracted
+            else:
+                return "I didn't catch that as a number. Try *20000* or *20k* (or *0* for none)"
 
         company_id = d.get('company_id')
         count = await get_employee_count(session, company_id)
@@ -304,16 +400,16 @@ async def handle_state(session: AsyncSession, phone: str, text: str, conv: Conve
         await reset_conversation_state(session, phone)
 
         total = d['basic'] + d.get('housing', 0) + d.get('transport', 0) + other
-        return f"""\u2705 *Employee Added!*
+        return f"""Done! *{d['name']}* has been added to your team! \U0001f389
 
-{d['name']} ({emp_code})
+*{d['name']}* ({emp_code})
 Position: {d.get('position', 'N/A')}
 Gross: {fmt(total)}
 
-*Next:*
-\u2022 ADD EMPLOYEE
-\u2022 PAYROLL
-\u2022 LIST"""
+What's next?
+\u2022 Say *add employee* to add another
+\u2022 Say *payroll* to run salaries
+\u2022 Say *list* to see your team"""
 
     return show_menu()
 
@@ -328,7 +424,7 @@ async def handle_pin_verify(session: AsyncSession, phone: str, text: str, conv: 
 
     if not user or not user.pin_hash:
         await reset_conversation_state(session, phone)
-        return "\u26a0\ufe0f No PIN set. Please REGISTER first."
+        return "No PIN set up yet. Say *register* to get started! \U0001f512"
 
     if verify_pin(text, user.pin_hash):
         # Mark verified
@@ -341,23 +437,23 @@ async def handle_pin_verify(session: AsyncSession, phone: str, text: str, conv: 
         return await handle_message(session, phone, resume_action)
     else:
         await log_action(session, getattr(user, 'company_id', None), phone, "PIN_FAILED", {})
-        return "\u274c Wrong PIN. Try again or type CANCEL."
+        return "That PIN doesn't match. \U0001f512 Give it another try, or say *cancel* to go back."
 
 
 async def handle_pin_set(session: AsyncSession, phone: str, text: str, conv: ConversationState) -> str:
     """Set PIN for first time (during registration is handled in REG_PIN)."""
     if not (text.isdigit() and len(text) == 4):
-        return "\u274c PIN must be exactly 4 digits."
+        return "The PIN needs to be exactly 4 digits. Try again! \U0001f522"
 
     user = await get_user(session, phone)
     if user:
         user.pin_hash = hash_pin(text)
         await session.flush()
         await reset_conversation_state(session, phone)
-        return "\u2705 PIN set! You can now use protected commands."
+        return "PIN set! \u2705 You can now use protected commands."
 
     await reset_conversation_state(session, phone)
-    return "\u26a0\ufe0f User not found. Please REGISTER first."
+    return "Hmm, couldn't find your account. Say *register* to get started! \U0001f60a"
 
 
 async def require_pin(session: AsyncSession, phone: str, action: str) -> str | None:
@@ -420,11 +516,11 @@ def _build_payslip_text(emp: Employee) -> str:
 async def handle_payroll(session: AsyncSession, phone: str) -> str:
     company = await get_company_by_phone(session, phone)
     if not company:
-        return "\u26a0\ufe0f Please REGISTER your company first"
+        return "Hmm, you haven't registered yet. Just say *register* to get started! \U0001f60a"
 
     user = await get_user(session, phone)
     if not check_role(user, "PAYROLL"):
-        return "\u26a0\ufe0f Only owners and admins can run payroll."
+        return "Only owners and admins can run payroll. Check with your admin! \U0001f512"
 
     # PIN check
     pin_prompt = await require_pin(session, phone, "PAYROLL")
@@ -433,7 +529,7 @@ async def handle_payroll(session: AsyncSession, phone: str) -> str:
 
     emps = await get_employees(session, company.id)
     if not emps:
-        return "\u26a0\ufe0f No employees. Type: ADD EMPLOYEE"
+        return "No employees yet! Say *add employee* to get started. \U0001f465"
 
     results = []
     total_net = Decimal('0')
@@ -474,7 +570,7 @@ async def handle_payroll(session: AsyncSession, phone: str) -> str:
         response += f"*Net: {fmt(r.net_salary)}*\n\n"
 
     response += f"{'━' * 30}\n*TOTAL NET: {fmt(total_net)}*\n{'━' * 30}\n\n"
-    response += f"Reply 1-{len(results)} to view payslip"
+    response += f"Reply 1-{len(results)} to view a payslip"
 
     return response
 
@@ -484,14 +580,14 @@ async def handle_payroll_detail(session: AsyncSession, phone: str, index: int, c
     payroll_results = d.get('payroll_results', [])
 
     if index < 1 or index > len(payroll_results):
-        return f"\u274c Invalid. Reply 1-{len(payroll_results)}"
+        return f"Hmm, that's not a valid option. Reply 1-{len(payroll_results)}"
 
     emp_ref = payroll_results[index - 1]
     company_id = d.get('company_id')
     emp = await get_employee_by_code(session, company_id, emp_ref['emp_code'])
 
     if not emp:
-        return "\u274c Employee not found"
+        return "Couldn't find that employee. Try again?"
 
     return _build_payslip_text(emp)
 
@@ -508,7 +604,7 @@ async def handle_payslip(session: AsyncSession, phone: str) -> str:
 
             emps = await get_employees(session, company.id)
             if not emps:
-                return "\u26a0\ufe0f No employees."
+                return "No employees yet! Say *add employee* to get started. \U0001f465"
 
             if len(emps) == 1:
                 await log_action(session, company.id, phone, "VIEW_PAYSLIP", {"employee": emps[0].employee_code})
@@ -516,7 +612,7 @@ async def handle_payslip(session: AsyncSession, phone: str) -> str:
 
             payroll_data = [{'emp_code': e.employee_code, 'emp_name': e.name} for e in emps]
             await set_conversation_state(session, phone, 'PAYROLL_VIEW', {'payroll_results': payroll_data, 'company_id': company.id})
-            response = "\U0001f4c4 *Select Employee*\n\n"
+            response = "\U0001f4c4 *Which employee's payslip?*\n\n"
             for i, emp in enumerate(emps, 1):
                 response += f"*{i}.* {emp.name}\n"
             response += f"\nReply 1-{len(emps)}"
@@ -537,7 +633,7 @@ async def handle_payslip(session: AsyncSession, phone: str) -> str:
                 except Exception:
                     continue
 
-    return "\u26a0\ufe0f No employee record found for your phone number.\n\nAsk your employer to add you via ADD EMPLOYEE."
+    return "No employee record found for your number. \U0001f914\n\nAsk your employer to add you via *add employee*."
 
 
 async def handle_leave(session: AsyncSession, phone: str) -> str:
@@ -572,21 +668,21 @@ async def handle_leave(session: AsyncSession, phone: str) -> str:
                 response += f"*{emp.name}*: {balance} days\n"
             return response
 
-    return "\u26a0\ufe0f No employee record found.\n\nAsk your employer to add you via ADD EMPLOYEE."
+    return "No employee record found for your number. \U0001f914\n\nAsk your employer to add you via *add employee*."
 
 
 async def list_employees(session: AsyncSession, phone: str) -> str:
     company = await get_company_by_phone(session, phone)
     if not company:
-        return "\u26a0\ufe0f Please REGISTER your company first"
+        return "Hmm, you haven't registered yet. Just say *register* to get started! \U0001f60a"
 
     user = await get_user(session, phone)
     if not check_role(user, "LIST"):
-        return "\u26a0\ufe0f Only owners and admins can view the employee list."
+        return "Only owners and admins can view the employee list. Check with your admin! \U0001f512"
 
     emps = await get_employees(session, company.id)
     if not emps:
-        return "\U0001f4ed No employees\n\nType: ADD EMPLOYEE"
+        return "No employees yet! Say *add employee* to build your team. \U0001f465"
 
     # Paginate for WhatsApp readability
     response = f"*\U0001f465 Your Team ({len(emps)})*\n\n"

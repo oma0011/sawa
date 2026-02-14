@@ -197,7 +197,18 @@ async def handle_state(session: AsyncSession, phone: str, text: str, conv: Conve
     if s == 'REG_PIN':
         if not (text.isdigit() and len(text) == 4):
             return "\u274c PIN must be exactly 4 digits."
+
+        if not d.get('name') or not d.get('email'):
+            await reset_conversation_state(session, phone)
+            return "\u26a0\ufe0f Session expired. Please type REGISTER to start again."
+
         pin_hashed = hash_pin(text)
+
+        # Check if already registered
+        existing = await get_company_by_phone(session, phone)
+        if existing:
+            await reset_conversation_state(session, phone)
+            return "\u2705 You're already registered! Type HELP for commands."
 
         # Create company
         company = Company(name=d['name'], email=d['email'], phone=phone)

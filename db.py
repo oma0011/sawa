@@ -13,6 +13,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy import select, update, delete
+from sqlalchemy.orm.attributes import flag_modified
 
 from config import settings
 
@@ -278,6 +279,7 @@ async def set_conversation_state(
             merged = dict(conv.data or {})
             merged.update(data)
             conv.data = merged
+            flag_modified(conv, "data")
         conv.updated_at = utcnow()
     await session.flush()
     return conv
@@ -288,6 +290,7 @@ async def reset_conversation_state(session: AsyncSession, phone: str):
     if conv:
         conv.state = "MENU"
         conv.data = {}
+        flag_modified(conv, "data")
         conv.pin_verified_at = None
         conv.updated_at = utcnow()
         await session.flush()

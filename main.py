@@ -77,9 +77,12 @@ async def whatsapp_webhook(
             async with session.begin():
                 response_text = await handle_message(session, phone, text)
                 return twiml_response(response_text)
-    except Exception:
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc()
         logger.exception("Webhook error for phone=%s", phone[:4] + "****")
-        return twiml_response("An error occurred. Please try again or type HELP.")
+        # Temporary: include error in response for debugging
+        return twiml_response(f"Error: {type(e).__name__}: {str(e)[:200]}")
 
 
 # ── Health & Root ───────────────────────────────────────────────────────────
